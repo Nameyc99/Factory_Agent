@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Smart Factory Alert Agent - Real-Time Simulation with per-row CLI alerts and ML threshold
+Smart Factory Alert Agent - Real-Time Simulation with per-row CLI alerts
 
 Usage example:
 python smartfactory_alert_agent.py \
   --input ./data/smart_factory_data.csv \
   --scaler ./out/scaler.joblib \
   --model ./out/isolation_forest.joblib \
-  --threshold ./out/threshold.json \
   --rules ./config/rules.json \
   --out_dir ./out \
   --report
@@ -26,11 +25,21 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
 
-# Configure logging
+import warnings
+warnings.filterwarnings("ignore", message="X does not have valid feature names")
+
+
+# -------------------------
+# Logging
+# -------------------------
 logger = logging.getLogger("smartfactory_alert_agent")
 handler = logging.StreamHandler()
-formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+)
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
@@ -54,6 +63,7 @@ def load_data(path: str) -> pd.DataFrame:
         sys.exit(1)
     return df.sort_values("timestamp").reset_index(drop=True)
 
+
 def load_rules(path: str) -> Dict[str, Any]:
     if not os.path.isfile(path):
         logger.error(f"Rules file not found: {path}")
@@ -64,11 +74,13 @@ def load_rules(path: str) -> Dict[str, Any]:
     rules.setdefault("alert_meta", {})
     return rules
 
+
 def load_scaler(path: str):
     if not os.path.isfile(path):
         logger.error(f"Scaler file not found: {path}")
         sys.exit(1)
     return joblib.load(path)
+
 
 def load_model(path: Optional[str]) -> Optional[BaseEstimator]:
     if not path:
@@ -77,14 +89,6 @@ def load_model(path: Optional[str]) -> Optional[BaseEstimator]:
         logger.error(f"Model file not found: {path}")
         sys.exit(1)
     return joblib.load(path)
-
-def load_threshold(path: Optional[str]) -> Optional[float]:
-    if not path or not os.path.isfile(path):
-        logger.warning(f"Threshold file not found: {path}")
-        return None
-    with open(path, "r") as f:
-        data = json.load(f)
-    return data.get("threshold")
 
 
 # -------------------------
@@ -96,6 +100,7 @@ def transform_threshold_value(idx: int, val: float, scaler, feature_order: List[
     sample = pd.DataFrame([[0.0]*len(feature_order)], columns=feature_order)
     sample.iloc[0, idx] = val
     return float(scaler.transform(sample)[0, idx])
+
 
 def transform_thresholds(rules: Dict[str, Any], scaler, feature_order: List[str]) -> Dict[str, Any]:
     thresholds = rules.get("thresholds", {})
@@ -147,7 +152,7 @@ def generate_suggestion(features: List[str], alert_meta: Dict[str, Any]) -> str:
     return " ".join(parts) if parts else "Investigate sensors."
 
 # -------------------------
-# Alert CSV & plotting
+# Alert CSV
 # -------------------------
 def ensure_alerts_csv(path: str):
     header = ["timestamp","row_index","feature","raw_values","scaled_values","rule_triggered","rule_details","model_triggered","model_score","model_prediction","severity","suggestion"]
@@ -175,6 +180,9 @@ def append_alert_csv(path: str, record: Dict[str,Any]):
     with open(path,"a") as f:
         f.write(line+"\n"); f.flush()
 
+# -------------------------
+# Plotting
+# -------------------------
 def plot_feature_anomalies(timestamps, raw_vals, rule_flags, ml_flags, out_path, feature_name, thresholds=None):
     import matplotlib.pyplot as plt
     plt.figure(figsize=(12,4))
@@ -195,12 +203,13 @@ def plot_feature_anomalies(timestamps, raw_vals, rule_flags, ml_flags, out_path,
 # -------------------------
 # Row processing
 # -------------------------
-def process_row(idx, row, scaler, scaled_rules, operators, combine, alert_meta, model, feature_order, ml_threshold: Optional[float]):
+def process_row(idx, row, scaled_rules, operators, combine, alert_meta, model, feature_order, scaler):
     numeric={f: float(row[f]) for f in feature_order}
-    row_df=pd.DataFrame([numeric], columns=feature_order)
-    scaled_arr=scaler.transform(row_df)
+
+    # Scale row
+    row_arr = np.array([numeric[f] for f in feature_order]).reshape(1, -1)
+    scaled_arr = scaler.transform(row_arr)
     scaled_vals={f: float(scaled_arr[0,i]) for i,f in enumerate(feature_order)}
-    scaled_df=pd.DataFrame(scaled_arr, columns=feature_order)
 
     rule_flags, rule_details={},{}
     for f in feature_order:
@@ -208,38 +217,33 @@ def process_row(idx, row, scaler, scaled_rules, operators, combine, alert_meta, 
             thr=scaled_rules["thresholds"][f]; op=operators.get(f,"outside_range")
             trig, det=eval_operator(scaled_vals[f], op, thr)
             rule_flags[f]=trig; rule_details[f]=det
-        else: rule_flags[f]=False; rule_details[f]=""
-    rule_triggered=any(rule_flags.values()) if combine=="any" else all(rule_flags.values())
-
-    model_triggered=False; model_score=None; model_pred=None
-    ml_flags={f:False for f in feature_order}
-    if model:
-        if hasattr(model,"decision_function"):
-            model_score = float(-model.decision_function(scaled_df)[0])
-            model_triggered = ml_threshold is not None and model_score > ml_threshold
-            # approximate attribution
-            z=(scaled_arr[0]-scaler.mean_)/scaler.scale_
-            for i,f in enumerate(feature_order): ml_flags[f]=abs(z[i])>1.5
         else:
-            pred = model.predict(scaled_df)[0]
-            model_triggered = pred == -1
-            model_score = None
-            model_pred = -1 if model_triggered else 1
+            rule_flags[f]=False; rule_details[f]=""
+    rule_triggered = any(rule_flags.values()) if combine=="any" else all(rule_flags.values())
 
+    # ML detection
+    ml_flags = {f:False for f in feature_order}
+    model_triggered=False
+    model_score=None
+    model_pred=None
+    if model:
+        model_pred_arr = model.predict(scaled_arr)[0]
+        model_triggered = model_pred_arr == -1
+        if hasattr(model, "decision_function"):
+            model_score = float(-model.decision_function(scaled_arr)[0])
+        else:
+            model_score = None
+        # approximate attribution
+        z=(scaled_arr[0]-scaler.mean_)/scaler.scale_
+        for i,f in enumerate(feature_order): ml_flags[f]=abs(z[i])>1.5
+
+    # Suggestion
     suggestion=None
     if rule_triggered:
         triggered_feats=[f for f,v in rule_flags.items() if v]
         suggestion=generate_suggestion(triggered_feats, alert_meta)
 
-    if not rule_triggered and not model_triggered:
-        return None, rule_flags, ml_flags
-
-    sev=None
-    try:
-        severities=[alert_meta.get("severity",{}).get(f) for f,v in rule_flags.items() if v]
-        if severities: sev=",".join([s for s in severities if s])
-    except: sev=None
-
+    # Build alert record
     alert_record={
         "timestamp":str(row["timestamp"]),
         "row_index":int(idx),
@@ -251,7 +255,7 @@ def process_row(idx, row, scaler, scaled_rules, operators, combine, alert_meta, 
         "model_triggered":model_triggered,
         "model_score":model_score,
         "model_prediction":-1 if model_triggered else 1,
-        "severity":sev,
+        "severity":None,
         "suggestion":suggestion
     }
     return alert_record, rule_flags, ml_flags
@@ -270,8 +274,8 @@ def simulate_realtime(
     limit: Optional[int],
     seed: int,
     verbose: bool,
-    ml_threshold: Optional[float] = None,
 ) -> Dict[str, Any]:
+
     np.random.seed(seed)
     feature_order = ["temp", "pressure", "vibration"]
     scaled_rules = transform_thresholds(rules, scaler, feature_order)
@@ -285,114 +289,76 @@ def simulate_realtime(
     alerts_csv = os.path.join(out_dir, "alerts.csv")
     ensure_alerts_csv(alerts_csv)
 
+    # Handle missing values
+    imputer = SimpleImputer(strategy="mean")
     df_proc = df.copy()
-    df_proc[feature_order] = df_proc[feature_order].ffill().bfill()
+    df_proc[feature_order] = imputer.fit_transform(df_proc[feature_order])
 
-    total_rows = 0
-    rule_alert_count = 0
-    ml_only_count = 0
-    combined_count = 0
-    per_feature_counts: Dict[str, int] = {f: 0 for f in feature_order}
-    model_stats = {"used": model is not None, "total_triggered": 0}
+    # Scaling
+    df_proc_scaled = pd.DataFrame(scaler.transform(df_proc[feature_order]), columns=feature_order)
 
-    plot_data = {f: {"timestamps": [], "raw": [], "rule_flags": [], "ml_flags": []} for f in feature_order}
+    total_rows=0; rule_alert_count=0; ml_only_count=0; combined_count=0
+    per_feature_counts={f:0 for f in feature_order}
+    plot_data={f:{"timestamps":[],"raw":[],"rule_flags":[],"ml_flags":[]} for f in feature_order}
 
     limit_rows = min(int(limit) if limit else len(df_proc), len(df_proc))
-
     for idx in range(limit_rows):
-        row = df_proc.iloc[idx]
-        total_rows += 1
+        row=df_proc.iloc[idx]
+        total_rows+=1
 
-        if row[feature_order].isna().any():
-            logger.warning(f"Row {idx} contains NaN after ffill/bfill; skipping row.")
-            continue
+        alert_record, rule_flags, ml_flags = process_row(
+            idx, row, scaled_rules, operators, combine, alert_meta, model, feature_order, scaler
+        )
 
-        result = process_row(idx, row, scaler, scaled_rules, operators, combine, alert_meta, model, feature_order, ml_threshold)
-        if result is None:
-            for f in feature_order:
-                plot_data[f]["timestamps"].append(row["timestamp"])
-                plot_data[f]["raw"].append(float(row[f]))
-                plot_data[f]["rule_flags"].append(False)
-                plot_data[f]["ml_flags"].append(False)
-            print(f"[NORMAL] {row['timestamp']} temp={row['temp']:.3f} pressure={row['pressure']:.3f} vibration={row['vibration']:.3f}")
-            if use_sleep and delay > 0:
-                time.sleep(delay)
-            continue
+        is_rule = alert_record["rule_triggered"]
+        is_model = alert_record["model_triggered"]
 
-        alert_record, rule_flags, ml_flags = result
-        if alert_record is None:
-            for f in feature_order:
-                plot_data[f]["timestamps"].append(row["timestamp"])
-                plot_data[f]["raw"].append(float(row[f]))
-                plot_data[f]["rule_flags"].append(False)
-                plot_data[f]["ml_flags"].append(False)
-            print(f"[NORMAL] {row['timestamp']} temp={row['temp']:.3f} pressure={row['pressure']:.3f} vibration={row['vibration']:.3f}")
-            if use_sleep and delay > 0:
-                time.sleep(delay)
-            continue
-
-        # Row triggered alert
-        is_rule, is_model = alert_record["rule_triggered"], alert_record["model_triggered"]
         if is_rule and is_model:
-            combined_count += 1
-            alert_type = "RULE+ML"
+            combined_count+=1; alert_type="RULE+ML"
         elif is_rule:
-            rule_alert_count += 1
-            alert_type = "RULE"
+            rule_alert_count+=1; alert_type="RULE"
         elif is_model:
-            ml_only_count += 1
-            alert_type = "ML"
+            ml_only_count+=1; alert_type="ML"
         else:
-            alert_type = "NORMAL"
-
-        if is_model:
-            model_stats["total_triggered"] += 1
+            alert_type="NORMAL"
 
         for f in feature_order:
-            if rule_flags.get(f):
-                per_feature_counts[f] += 1
-
-        score_str = f"{alert_record['model_score']:.6f}" if alert_record['model_score'] is not None else "n/a"
-        msg = (f"[{alert_type}] {alert_record['timestamp']} temp={row['temp']:.3f} "
-               f"pressure={row['pressure']:.3f} vibration={row['vibration']:.3f} ML_score={score_str}")
-        print(msg)
+            if rule_flags.get(f): per_feature_counts[f]+=1
 
         append_alert_csv(alerts_csv, alert_record)
 
         for f in feature_order:
             plot_data[f]["timestamps"].append(row["timestamp"])
             plot_data[f]["raw"].append(float(row[f]))
-            plot_data[f]["rule_flags"].append(bool(rule_flags.get(f, False)))
-            plot_data[f]["ml_flags"].append(bool(ml_flags.get(f, False)))
+            # Use rule_triggered and row-level model_triggered for plotting
+            plot_data[f]["rule_flags"].append(rule_flags.get(f, False))
+            plot_data[f]["ml_flags"].append(alert_record['model_triggered'])  # <- row-level ML
 
-        if use_sleep and delay > 0:
-            time.sleep(delay)
 
-    # Plot generation
-    plot_paths = {}
-    feature_thresholds = {}
-    for f, thresh in rules.get("thresholds", {}).items():
-        ft = {}
-        if "anomaly_low" in thresh:
-            ft["low"] = thresh["anomaly_low"]
-        if "anomaly_high" in thresh:
-            ft["high"] = thresh["anomaly_high"]
-        feature_thresholds[f] = ft
+        score_str = f"{alert_record['model_score']:.6f}" if alert_record['model_score'] is not None else "n/a"
+        sug_str = alert_record['suggestion'] if alert_record['suggestion'] else "None"
+        print(f"[{alert_type}] {alert_record['timestamp']} "
+            f"temp={row['temp']:.3f} pressure={row['pressure']:.3f} vibration={row['vibration']:.3f} "
+            f"ML_score={score_str} Suggestion: {sug_str}")
 
+        if use_sleep and delay>0: time.sleep(delay)
+
+    # Plotting
+    feature_thresholds={}
+    for f,thresh in rules.get("thresholds", {}).items():
+        ft={}
+        if "anomaly_low" in thresh: ft["low"]=thresh["anomaly_low"]
+        if "anomaly_high" in thresh: ft["high"]=thresh["anomaly_high"]
+        feature_thresholds[f]=ft
+    plot_paths={}
     for f in feature_order:
-        ppath = os.path.join(plots_dir, f"{f}_anomalies.png")
+        ppath=os.path.join(plots_dir,f"{f}_anomalies.png")
         plot_feature_anomalies(
-            plot_data[f]["timestamps"],
-            plot_data[f]["raw"],
-            plot_data[f]["rule_flags"],
-            plot_data[f]["ml_flags"],
-            ppath,
-            f,
-            thresholds=feature_thresholds.get(f)
+            plot_data[f]["timestamps"], plot_data[f]["raw"], plot_data[f]["rule_flags"], plot_data[f]["ml_flags"], ppath, f, thresholds=feature_thresholds.get(f)
         )
-        plot_paths[f] = ppath
+        plot_paths[f]=ppath
 
-    summary = {
+    summary={
         "total_rows_processed": total_rows,
         "rule_alerts": rule_alert_count,
         "ml_only_alerts": ml_only_count,
@@ -400,11 +366,10 @@ def simulate_realtime(
         "per_feature_counts": per_feature_counts,
         "plots": plot_paths,
         "alerts_csv": alerts_csv,
-        "model_stats": model_stats,
     }
 
-    summary_path = os.path.join(out_dir, "alerts_summary.json")
-    with open(summary_path, "w", encoding="utf-8") as sf:
+    summary_path=os.path.join(out_dir,"alerts_summary.json")
+    with open(summary_path,"w",encoding="utf-8") as sf:
         json.dump(summary, sf, default=str, indent=2)
 
     return summary
@@ -417,7 +382,6 @@ def parse_args():
     p.add_argument("--input",type=str,required=True)
     p.add_argument("--scaler",type=str,required=True)
     p.add_argument("--model",type=str,default=None)
-    p.add_argument("--threshold",type=str,default=None)
     p.add_argument("--rules",type=str,required=True)
     p.add_argument("--out_dir",type=str,default="./out")
     p.add_argument("--report",action="store_true")
@@ -435,11 +399,9 @@ def main():
     rules=load_rules(args.rules)
     scaler=load_scaler(args.scaler)
     model=load_model(args.model)
-    ml_threshold = load_threshold(args.threshold)
     limit=args.limit if args.limit and args.limit>0 else None
     summary=simulate_realtime(df, scaler, rules, model, args.out_dir,
-                              args.delay, args.use_sleep, limit, args.seed, args.verbose,
-                              ml_threshold=ml_threshold)
+                              args.delay, args.use_sleep, limit, args.seed, args.verbose)
     if args.report:
         logger.info(json.dumps(summary, indent=2))
 
