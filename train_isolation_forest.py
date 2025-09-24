@@ -7,7 +7,7 @@ Supports grid search for hyperparameter tuning and always outputs metrics.
 
 Usage Examples:
 python train_isolation_forest.py --train ./out/train.csv --test ./out/test.csv \
-    --scaler ./out/scaler.joblib --output_model ./out/isolation_forest.joblib \
+    --output_model ./out/isolation_forest.joblib \
     --grid_search --report
 """
 
@@ -34,7 +34,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 
 # -------------------------
-# Data loading and preprocessing
+# Data loading
 # -------------------------
 def load_data(path: str) -> pd.DataFrame:
     if not os.path.isfile(path):
@@ -47,17 +47,6 @@ def load_data(path: str) -> pd.DataFrame:
             logging.error(f"Missing required column '{col}' in {path}")
             sys.exit(1)
     return df
-
-
-def prepare_features(df: pd.DataFrame, scaler_path: Optional[str] = None) -> pd.DataFrame:
-    features = df[["temp", "pressure", "vibration"]].copy()
-    if scaler_path:
-        if not os.path.isfile(scaler_path):
-            logging.error(f"Scaler file not found: {scaler_path}")
-            sys.exit(1)
-        scaler = joblib.load(scaler_path)
-        features = pd.DataFrame(scaler.transform(features), columns=features.columns)
-    return features
 
 
 def map_labels(df: pd.DataFrame, ignore_unknown: bool = False) -> pd.Series:
@@ -85,7 +74,7 @@ def train_iforest(
     out_dir: str = "./out",
 ) -> Tuple[IsolationForest, float, dict]:
     """
-    Train IsolationForest with optional grid search.
+    Train IsolationForest on already scaled data.
     Returns:
         clf: trained model
         threshold: anomaly score threshold
@@ -123,8 +112,8 @@ def train_iforest(
         y_val = y_test[mask].astype(int)
 
         n_estimators_grid = [100, 200, 300]
-        contamination_grid = [0.15, 0.20, 0.25]
-        expected_max_anomaly_frac = 0.212
+        contamination_grid = [0.01, 0.02, 0.03, 0.04, 0.05]
+        expected_max_anomaly_frac = 0.1
 
         best_f1 = -1.0
         for n_est in n_estimators_grid:
@@ -139,7 +128,8 @@ def train_iforest(
                 clf.fit(X_train)
                 scores = clf.decision_function(X_val)
                 thresh = np.percentile(scores, 100 * expected_max_anomaly_frac)
-                preds = (scores <= thresh).astype(int)
+                preds = clf.predict(X_val)
+                preds = np.where(preds == -1, 1, 0)
                 anomaly_frac = preds.mean()
                 f1 = f1_score(y_val, preds, pos_label=1)
                 logging.info(f"n_estimators={n_est}, contamination={cont:.3f}, anomaly_frac={anomaly_frac:.3f}, anomaly F1={f1:.4f}")
@@ -183,7 +173,6 @@ def train_iforest(
         avg_precision = (precision_normal + precision_abnormal) / 2
         avg_recall = (recall_normal + recall_abnormal) / 2
 
-        # Save metrics dictionary
         metrics = {
             "accuracy": accuracy,
             "precision_normal": precision_normal,
@@ -203,12 +192,11 @@ def train_iforest(
             logging.info(f"{k:20s}: {v:.4f}")
         logging.info("==========================")
 
-        # Save metrics to JSON file
-        os.makedirs(out_dir, exist_ok=True)
-        metrics_path = os.path.join(out_dir, "metrics.json")
-        with open(metrics_path, "w") as f:
-            json.dump(metrics, f, indent=4)
-        logging.info(f"Metrics saved to {metrics_path}")
+        logging.info('=== Hyperparameters ===')
+        logging.info(f"n_estimators       : {best_model.n_estimators}")
+        logging.info(f"contamination      : {best_model.contamination:.4f}")
+        logging.info(f"max_samples       : {best_model.max_samples}")
+        logging.info('======================')
 
     logging.info(f"Selected threshold for anomaly detection: {best_threshold:.4f}")
 
@@ -232,10 +220,9 @@ def save_artifacts(clf: IsolationForest, threshold: float, output_model: str, ou
 # CLI
 # -------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Train Isolation Forest on preprocessed Smart Factory data")
+    parser = argparse.ArgumentParser(description="Train Isolation Forest on scaled Smart Factory data")
     parser.add_argument("--train", type=str, required=True)
     parser.add_argument("--test", type=str)
-    parser.add_argument("--scaler", type=str)
     parser.add_argument("--output_model", type=str, default="./out/isolation_forest.joblib")
     parser.add_argument("--grid_search", action="store_true")
     parser.add_argument("--out_dir", type=str, default="./out")
@@ -245,12 +232,12 @@ def main():
     args = parser.parse_args()
 
     train_df = load_data(args.train)
-    X_train = prepare_features(train_df, args.scaler)
+    X_train = train_df[["temp", "pressure", "vibration"]].values
     y_train = map_labels(train_df)
 
     if args.test and os.path.isfile(args.test):
         test_df = load_data(args.test)
-        X_test = prepare_features(test_df, args.scaler)
+        X_test = test_df[["temp", "pressure", "vibration"]].values
         y_test = map_labels(test_df)
     else:
         X_test = y_test = None
@@ -259,8 +246,8 @@ def main():
         X_train,
         X_test,
         y_test,
-        contamination=0.01,
-        n_estimators=100,
+        contamination=0.05,  # adjust based on your data
+        n_estimators=200,
         grid_search=args.grid_search,
         n_jobs=args.n_jobs,
         seed=args.seed,
