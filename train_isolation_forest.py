@@ -16,13 +16,18 @@ import sys
 import json
 import logging
 import argparse
-from typing import Tuple, Optional, Dict, Any, Union
+from typing import Tuple, Optional, Union
 
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import IsolationForest
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score
+)
 import joblib
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -77,13 +82,14 @@ def train_iforest(
     n_jobs: int = -1,
     seed: int = 42,
     grid_search: bool = False,
-) -> Tuple[IsolationForest, float]:
+    out_dir: str = "./out",
+) -> Tuple[IsolationForest, float, dict]:
     """
-    Train IsolationForest with optional manual grid search using a test-set threshold.
-
+    Train IsolationForest with optional grid search.
     Returns:
-        clf: trained IsolationForest
-        threshold: score threshold corresponding to realistic anomaly fraction
+        clf: trained model
+        threshold: anomaly score threshold
+        metrics: evaluation metrics dictionary
     """
     # Determine max_samples
     max_samples_val = max_samples
@@ -108,7 +114,7 @@ def train_iforest(
     best_threshold = None
 
     # -------------------------
-    # Grid search logic
+    # Grid search
     # -------------------------
     if grid_search and X_test is not None and y_test is not None and (~np.isnan(y_test)).sum() > 0:
         logging.info("Starting manual grid search using test set for threshold selection...")
@@ -117,8 +123,8 @@ def train_iforest(
         y_val = y_test[mask].astype(int)
 
         n_estimators_grid = [100, 200, 300]
-        contamination_grid = [0.15, 0.20, 0.25]  # tuned for your ~20% anomaly data
-        expected_max_anomaly_frac = 0.212  # known anomaly fraction
+        contamination_grid = [0.15, 0.20, 0.25]
+        expected_max_anomaly_frac = 0.212
 
         best_f1 = -1.0
         for n_est in n_estimators_grid:
@@ -136,9 +142,7 @@ def train_iforest(
                 preds = (scores <= thresh).astype(int)
                 anomaly_frac = preds.mean()
                 f1 = f1_score(y_val, preds, pos_label=1)
-                logging.info(
-                    f"n_estimators={n_est}, contamination={cont:.3f}, anomaly_frac={anomaly_frac:.3f}, anomaly F1={f1:.4f}"
-                )
+                logging.info(f"n_estimators={n_est}, contamination={cont:.3f}, anomaly_frac={anomaly_frac:.3f}, anomaly F1={f1:.4f}")
                 tolerance = 0.02
                 if anomaly_frac <= expected_max_anomaly_frac * (1 + tolerance) and f1 > best_f1:
                     best_f1 = f1
@@ -153,13 +157,13 @@ def train_iforest(
         # Default training
         base_model.fit(X_train)
         scores = base_model.decision_function(X_train)
-        # Default threshold at ~2% lowest scores
         best_threshold = np.percentile(scores, 100 * 0.02)
         best_model = base_model
 
     # -------------------------
-    # Always evaluate if test labels exist
+    # Evaluation metrics
     # -------------------------
+    metrics = {}
     if X_test is not None and y_test is not None and (~np.isnan(y_test)).sum() > 0:
         mask = ~np.isnan(y_test)
         X_eval = X_test[mask]
@@ -167,35 +171,48 @@ def train_iforest(
         scores_eval = best_model.decision_function(X_eval)
         preds_eval = (scores_eval <= best_threshold).astype(int)
         anomaly_frac = preds_eval.mean()
-        f1_eval = f1_score(y_eval, preds_eval, pos_label=1)
-        logging.info(f"[Evaluation] Anomaly fraction={anomaly_frac:.3f}, F1 score={f1_eval:.4f}")
 
+        accuracy = accuracy_score(y_eval, preds_eval)
+        precision_normal = precision_score(y_eval, preds_eval, pos_label=0)
+        precision_abnormal = precision_score(y_eval, preds_eval, pos_label=1)
+        recall_normal = recall_score(y_eval, preds_eval, pos_label=0)
+        recall_abnormal = recall_score(y_eval, preds_eval, pos_label=1)
+        f1_normal = f1_score(y_eval, preds_eval, pos_label=0)
+        f1_abnormal = f1_score(y_eval, preds_eval, pos_label=1)
+        roc_auc = roc_auc_score(y_eval, -scores_eval)  # invert since low scores = anomalies
+        avg_precision = (precision_normal + precision_abnormal) / 2
+        avg_recall = (recall_normal + recall_abnormal) / 2
 
-    accuracy = accuracy_score(y_eval, preds_eval)
-    precision_normal = precision_score(y_eval, preds_eval, pos_label=0)
-    precision_abnormal = precision_score(y_eval, preds_eval, pos_label=1)
-    recall_normal = recall_score(y_eval, preds_eval, pos_label=0)
-    recall_abnormal = recall_score(y_eval, preds_eval, pos_label=1)
-    f1_normal = f1_score(y_eval, preds_eval, pos_label=0)
-    f1_abnormal = f1_score(y_eval, preds_eval, pos_label=1)
-    roc_auc = roc_auc_score(y_eval, -scores_eval)  # invert since low scores = anomalies
+        # Save metrics dictionary
+        metrics = {
+            "accuracy": accuracy,
+            "precision_normal": precision_normal,
+            "precision_abnormal": precision_abnormal,
+            "recall_normal": recall_normal,
+            "recall_abnormal": recall_abnormal,
+            "f1_normal": f1_normal,
+            "f1_abnormal": f1_abnormal,
+            "avg_precision": avg_precision,
+            "avg_recall": avg_recall,
+            "roc_auc": roc_auc,
+            "anomaly_fraction": anomaly_frac
+        }
 
-    logging.info("=== Evaluation Metrics ===")
-    logging.info(f"Accuracy               : {accuracy:.4f}")
-    logging.info(f"Precision (Normal)     : {precision_normal:.4f}")
-    logging.info(f"Precision (Abnormal)   : {precision_abnormal:.4f}")
-    logging.info(f"Recall (Normal)        : {recall_normal:.4f}")
-    logging.info(f"Recall (Abnormal)      : {recall_abnormal:.4f}")
-    logging.info(f"F1-Score (Normal)      : {f1_normal:.4f}")
-    logging.info(f"F1-Score (Abnormal)    : {f1_abnormal:.4f}")
-    logging.info(f"ROC-AUC                : {roc_auc:.4f}")
-    logging.info("==========================")
+        logging.info("=== Evaluation Metrics ===")
+        for k, v in metrics.items():
+            logging.info(f"{k:20s}: {v:.4f}")
+        logging.info("==========================")
 
-
+        # Save metrics to JSON file
+        os.makedirs(out_dir, exist_ok=True)
+        metrics_path = os.path.join(out_dir, "metrics.json")
+        with open(metrics_path, "w") as f:
+            json.dump(metrics, f, indent=4)
+        logging.info(f"Metrics saved to {metrics_path}")
 
     logging.info(f"Selected threshold for anomaly detection: {best_threshold:.4f}")
 
-    return best_model, best_threshold
+    return best_model, best_threshold, metrics
 
 
 # -------------------------
@@ -238,7 +255,7 @@ def main():
     else:
         X_test = y_test = None
 
-    clf, threshold = train_iforest(
+    clf, threshold, metrics = train_iforest(
         X_train,
         X_test,
         y_test,
@@ -247,6 +264,7 @@ def main():
         grid_search=args.grid_search,
         n_jobs=args.n_jobs,
         seed=args.seed,
+        out_dir=args.out_dir,
     )
 
     save_artifacts(clf, threshold, args.output_model, args.out_dir)
