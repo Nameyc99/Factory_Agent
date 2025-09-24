@@ -1,0 +1,21 @@
+{
+  "total_rows_processed": 500,
+  "rule_alerts": 23,
+  "ml_only_alerts": 0,
+  "combined_alerts": 0,
+  "per_feature_counts": {
+    "temp": 4,
+    "pressure": 4,
+    "vibration": 15
+  },
+  "plots": {
+    "temp": "./out/plots/temp_anomalies.png",
+    "pressure": "./out/plots/pressure_anomalies.png",
+    "vibration": "./out/plots/vibration_anomalies.png"
+  },
+  "alerts_csv": "./out/alerts.csv",
+  "model_stats": {
+    "used": true,
+    "total_triggered": 0
+  }
+}

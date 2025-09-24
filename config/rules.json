@@ -1,0 +1,28 @@
+{
+  "thresholds": {
+    "temp": {
+      "anomaly_low": 43.0,
+      "anomaly_high": 52.0
+    },
+    "pressure": {
+      "anomaly_low": 0.97,
+      "anomaly_high": 1.08
+    },
+    "vibration": {
+      "anomaly_high": 0.07
+    }
+  },
+  "operators": {
+    "temp": "outside_range",
+    "pressure": "outside_range",
+    "vibration": "above"
+  },
+  "combine": "any",
+  "alert_meta": {
+    "severity": {
+      "temp": "high",
+      "pressure": "high",
+      "vibration": "medium"
+    }
+  }
+}
