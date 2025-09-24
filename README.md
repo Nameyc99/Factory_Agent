@@ -1,254 +1,276 @@
----
-title: Smart Factory Alert Agent
+# README.md
+
+## Project Description
+
+The Smart Factory Anomaly Detection project simulates real-time monitoring of industrial sensors in a smart factory environment. The system supports **rule-based** and **machine learning (Isolation Forest)** anomaly detection, providing actionable alerts and visualizations of anomalous behavior. 
+
+A **synthetic dataset** with configurable anomalies and missing values can be generated to test the pipeline end-to-end.
 
 ---
 
-# Smart Factory Alert Agent
+## Features
 
-A lightweight prototype for smart factory anomaly detection, including a synthetic dataset generator, a versatile alert agent (rule-based, ML, or hybrid), and demo + evaluation tools.
+- **Synthetic Dataset Generation**  
+  - Script: `generate_smartfactory_dataset.py`  
+  - Generates sensor readings (`temp`, `pressure`, `vibration`) with anomalies and optional missing values.
+  - Configurable row count, sampling frequency, and anomaly percentage.
+
+- **Data Preprocessing Pipeline**  
+  - Script: `preprocess_data.py`  
+  - Handles missing value imputation (`mean`, `median`, `ffill`, `bfill`, `drop`).  
+  - Supports scaling (`standard`, `minmax`) and train/test split.  
+  - Saves cleaned datasets and scaler objects for downstream tasks.
+
+- **Isolation Forest Training**  
+  - Script: `train_isolation_forest.py`  
+  - Trains an Isolation Forest model on preprocessed data.  
+  - Supports grid search for hyperparameter tuning.  
+  - Produces evaluation metrics, confusion matrix, ROC AUC, and a recommended threshold.
+
+- **Real-Time Simulation Agent**  
+  - Script: `smartfactory_alert_agent.py`  
+  - Supports **rule-based detection** configurable via JSON rules.  
+  - Supports **ML-based detection** using pre-trained Isolation Forest.  
+  - Prints console alerts with human-friendly suggestions for rule-based anomalies.  
+  - Generates plots for each feature highlighting anomalies (rule, ML, or both).  
 
 ---
-
-## Table of Contents 
-- [Quick start](#quick-start)
-- [Repository layout](#repository-layout)
-- [Installation](#installation)
-- [Data format & generator](#data-format--generator)
-- [Usage: Agent CLI](#usage-agent-cli)
-- [Alerts & output formats](#alerts--output-formats)
-- [Evaluation & report](#evaluation--report)
-- [Troubleshooting & edge cases](#troubleshooting--edge-cases)
-- [Reproducibility & randomness](#reproducibility--randomness)
-- [AI tools & credits](#ai-tools--credits)
-- [Deliverables & submission checklist](#deliverables--submission-checklist)
-- [Extending the project (optional ideas)](#extending-the-project-optional-ideas)
-
----
-
-## Quick start
-
-Run the following commands to reproduce the default demo locally:
-
-```bash
-# 1. Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate   # (use .venv\Scripts\activate on Windows)
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Generate the default dataset (200 rows, 1min freq, 8% anomalies)
-python generate_smartfactory_dataset.py
-
-# 4. Run demo mode of the agent in hybrid mode
-python smartfactory_alert_agent.py --data ./data/smartfactory_dataset.csv --model hybrid --demo --out_dir ./out
-
-```
-
-## Repository layout
-
-```
-.
-├── generate_smartfactory_dataset.py
-├── smartfactory_alert_agent.py
-├── requirements.txt
-├── README.md
-├── report.pdf
-├── data/ # synthetic datasets
-├── out/ # demo outputs (alerts, summary, models)
-└── report_figures/ # report diagrams & figures
-```
 
 ## Installation
 
-- **Python requirement:** Python 3.10 or higher is recommended.
-- Works on Linux, macOS, and Windows.  
-- Ensure you have `pip` and `venv` available.
-
-### Step-by-step
+1. **Python Version**: `>=3.11`  
+2. **Required Packages**:
 
 ```bash
-# 1. Create and activate a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate      # On Linux/macOS
-# .venv\Scripts\activate       # On Windows PowerShell
+pip install pandas numpy scikit-learn joblib matplotlib
+```
 
-# 2. Install dependencies
-pip install --upgrade pip
+3. **Optional Virtual Environment:**
+```
+python -m venv venv
+source venv/bin/activate   # macOS/Linux
+venv\Scripts\activate      # Windows
 pip install -r requirements.txt
-
 ```
 
-## Data format & generator
+---
 
-The dataset is stored as a CSV with the following header and columns:
+## Usage Examples
 
-| Column     | Type    | Description                                                                 |
-|------------|---------|-----------------------------------------------------------------------------|
-| `timestamp`| string  | Timestamp in `YYYY-MM-DD HH:MM:SS` format (24h).                            |
-| `temp`     | float   | Machine temperature in °C.                                                  |
-| `pressure` | float   | Machine pressure in bar.                                                    |
-| `vibration`| float   | Vibration in g.                                                             |
-| `label`    | string  | Ground-truth status: `normal`, `abnormal`, or `unknown`.                    |
-
-### Default dataset characteristics
-- Rows: **200**
-- Frequency: **1 minute**
-- Anomaly percentage: **8%**
-- Missing value percentage: **2%**
-- Random seed: **42**
-
-### Commands
-
-Generate a dataset with defaults:
+### 1. Generate Synthetic Dataset
 
 ```bash
-python generate_smartfactory_dataset.py
+python generate_smartfactory_dataset.py \
+  --rows 500 \
+  --freq 1min \
+  --anomaly_pct 0.1 \
+  --out ./data/smart_factory_data.csv
 ```
 
-Generate with custom arguments:
-```bash
-python generate_smartfactory_dataset.py --rows 300 --freq 5min --out ./data/my.csv
-```
-
-Example CSV (first 3 rows)
-```
-timestamp,temp,pressure,vibration,label
-2025-01-01 00:00:00,46.2,1.03,0.03,normal
-2025-01-01 00:01:00,45.9,1.01,0.02,normal
-2025-01-01 00:02:00,53.8,1.04,0.08,abnormal
-```
-
-## Usage: Agent CLI
-
-The alert agent consumes the generated dataset and performs anomaly detection using three possible modes:
-
-- **`rule`**: fixed thresholds on sensor values.
-- **`ml`**: IsolationForest anomaly detection.
-- **`hybrid`**: combines rule-based and ML detectors (default).
-
-### Command-line options
-
-| Flag            | Type     | Default  | Description                                                                 |
-|-----------------|----------|----------|-----------------------------------------------------------------------------|
-| `--data`        | str      | (req.)   | Path to input CSV dataset.                                                  |
-| `--model`       | str      | hybrid   | Detection mode: `rule`, `ml`, or `hybrid`.                                  |
-| `--train`       | flag     | off      | If present with `ml`/`hybrid`, trains the IsolationForest.                  |
-| `--out_dir`     | str      | `./out`  | Directory for outputs (alerts, summary, models).                            |
-| `--realtime`    | flag     | off      | Simulate streaming with row-by-row alerts.                                  |
-| `--speed`       | float    | 0.05     | Sleep interval (seconds) between rows in realtime mode.                     |
-| `--window`      | int      | 1        | Rolling window size for smoothing.                                          |
-| `--threshold`   | float    | auto     | ML anomaly score threshold.                                                 |
-| `--seed`        | int      | 42       | Random seed for reproducibility.                                            |
-| `--save_model`  | flag     | off      | Save trained ML model to `out_dir`.                                         |
-| `--log_json`    | flag     | off      | Save alerts as JSONL to `out_dir/alerts.jsonl`.                             |
-| `--report`      | flag     | off      | Generate evaluation report to `out_dir/summary.txt`.                        |
-| `--demo`        | flag     | off      | Run on first 200 rows with sample alerts and summary.                       |
-
-### Examples
-
-**Hybrid realtime demo:**
-
-```bash
-python smartfactory_alert_agent.py --data ./data/smartfactory_dataset.csv --model hybrid --realtime --speed 0.1 --log_json --out_dir ./out
+### 2. Preprocess 
 
 ```
-
-Train and save an ML model:
-
-```bash
-python smartfactory_alert_agent.py --data ./data/smartfactory_dataset.csv --model ml --train --save_model --out_dir ./out
+python preprocess_data.py \
+  --input ./data/smart_factory_data.csv \
+  --output ./data/smart_factory_preprocessed.csv \
+  --impute ffill \
+  --scale standard \
+  --split 0.8 \
+  --report \
 ```
 
-Rule-based quick check with JSON logging:
-```bash
-python smartfactory_alert_agent.py --data ./data/smartfactory_dataset.csv --model rule --log_json --out_dir ./out
+### 3. Train Isolation Forest
+
+```
+python train_isolation_forest.py \
+  --train ./out/train.csv \
+  --test ./out/test.csv \
+  --scaler ./out/scaler.joblib \
+  --output_model ./out/isolation_forest.joblib \
+  --contamination 0.01 \
+  --n_estimators 100 \
+  --report
 ```
 
-Each run saves outputs into the specified out_dir (default ./out).
+### 4. Train Isolation Forest with Grid Search
+```
+python train_isolation_forest.py \
+  --train ./out/train.csv \
+  --test ./out/test.csv \
+  --scaler ./out/scaler.joblib \
+  --output_model ./out/isolation_forest.joblib \
+  --grid_search \
+  --report
+ ```
 
-## Alerts & output formats
 
-- **Console alerts**: compact, human-readable lines:
-
-```bash
-[ALERT] 2025-01-01 00:10:00 | abnormal | temp=53.2, pressure=1.01, vibration=0.02 | suggestion=Check cooling system
+### 5. Run Alert Agent (Rule + ML Detection)
+```
+python smartfactory_alert_agent.py \
+  --input ./data/smart_factory_data.csv \
+  --scaler ./out/scaler.joblib \
+  --model ./out/isolation_forest.joblib \
+  --rules ./config/rules.json \
+  --out_dir ./out \
+  --report \
+  --delay 0.1 \
+  --use_sleep
 ```
 
+### 6. Run Alert Agent (Rule-Only Detection)
+```
+python smartfactory_alert_agent.py \
+  --input ./data/smart_factory_data.csv \
+  --scaler ./out/scaler.joblib \
+  --rules ./config/rules.json \
+  --out_dir ./out \
+  --report
+```
 
-- **JSONL schema** (`out_dir/alerts.jsonl`):
+### 7. Limit Number of Rows (for Testing)
+```
+python smartfactory_alert_agent.py \
+  --input ./data/smart_factory_data.csv \
+  --scaler ./out/scaler.joblib \
+  --model ./out/isolation_forest.joblib \
+  --rules ./config/rules.json \
+  --limit 50 \
+  --out_dir ./out \
+  --report
+```
+
+Here’s the **Project Structure** section in Markdown, standalone:
+
+## Project Structure
+
+```
+smart-factory-anomaly-detection/
+│
+├─ data/                       # Synthetic datasets generated
+│   └─ smart_factory_data.csv
+|   └─smart_factory_preprocessed.csv
+│
+├─ out/                        # Output artifacts (preprocessed data, models, alerts, plots)
+│   ├─ train.csv
+│   ├─ test.csv
+│   ├─ scaler.joblib
+│   ├─ isolation\_forest.joblib
+│   ├─ alerts.csv
+│   ├─ alerts\_summary.json
+│   ├─ threshold.json
+│   └─ plots/
+│       ├─ temp\_anomalies.png
+│       ├─ pressure\_anomalies.png
+│       └─ vibration\_anomalies.png
+│
+├─ config/                     # Configuration files
+│   └─ rules.json              # Rule-based alert thresholds and severity
+│
+├─ generate\_smartfactory\_dataset.py   # Script to generate synthetic sensor data with anomalies
+├─ preprocess\_data.py                 # Preprocessing pipeline: imputation, scaling, train/test split
+├─ train\_isolation\_forest.py          # Train Isolation Forest model on preprocessed data
+├─ smartfactory\_alert\_agent.py        # Real-time alert agent: rule-based and ML-based detection
+└─ README.md                          # Project documentation
+
+```
+
+**Description of each script/file:**
+
+- **generate_smartfactory_dataset.py**: Generates synthetic sensor data (`temp`, `pressure`, `vibration`) with normal, abnormal, and unknown labels. Can inject missing values.
+
+- **preprocess_data.py**: Handles missing value imputation, scaling (`StandardScaler` or `MinMaxScaler`), and splits data into train/test sets. Saves processed datasets and scaler object.
+
+- **train_isolation_forest.py**: Trains an Isolation Forest on preprocessed data, optionally performs grid search, evaluates performance, and saves the trained model and threshold info.
+
+- **smartfactory_alert_agent.py**: Simulates real-time anomaly detection. Supports:
+  - Rule-based detection using JSON-configured thresholds.
+  - ML-based detection using a pre-trained Isolation Forest.
+  - Alerts with console messages and human-friendly suggestions.
+  - Plots each feature with anomalies marked.
+
+- **config/rules.json**: JSON file defining thresholds, operators, severity levels for rule-based detection.
+
+- **out/**: Directory for all artifacts, including processed datasets, trained models, alerts logs, plots, and recommended thresholds.
+
+- **README.md**: Documentation describing usage, features, configuration, and project workflow.
+
+
+Here’s the **Configuration** section in Markdown, standalone:
+
+## Configuration
+
+### Rule-based Alerts JSON
+
+The rule-based detection system uses a JSON file to define thresholds, operators, and alert severity for each feature. Example structure:
 
 ```json
 {
-  "timestamp": "2025-01-01 00:10:00",
-  "row_index": 10,
-  "sensor_values": {"temp": 53.2, "pressure": 1.01, "vibration": 0.02},
-  "detector_flags": {"rule": true, "ml": false},
-  "anomaly_score": 0.76,
-  "label_pred": "abnormal",
-  "suggestion": "Check cooling system"
+  "thresholds": {
+    "temp": {"anomaly_low": 43.0, "anomaly_high": 52.0},
+    "pressure": {"anomaly_low": 0.97, "anomaly_high": 1.08},
+    "vibration": {"anomaly_high": 0.07}
+  },
+  "operators": {
+    "temp": "outside_range",
+    "pressure": "outside_range",
+    "vibration": "above"
+  },
+  "combine": "any",
+  "alert_meta": {
+    "severity": {
+      "temp": "high",
+      "pressure": "high",
+      "vibration": "medium"
+    }
+  }
 }
-```
+````
 
-- **Summary output** (out_dir/summary.txt): counts of normal/abnormal/unknown, total alerts, metrics summary.
-- **Saved ML model artifacts**: model_<timestamp>.joblib in out_dir.
-    
-## Evaluation & report
+**Field explanations:**
 
-- Use `--report` to generate evaluation metrics after processing a dataset with labels.
-- Metrics include:
-  - Confusion matrix
-  - Precision, recall, F1-score for `abnormal` class
-  - ROC AUC / PR AUC if ML-based detection was used
-- Only rows labeled `normal` or `abnormal` are included in evaluation; rows labeled `unknown` are ignored.
-- Outputs are saved to `out_dir/summary.txt` and optional plots can be found in `report_figures/`.
+* `thresholds`: Defines numeric thresholds for each feature.
 
----
+  * Use `anomaly_low` and/or `anomaly_high` for ranges.
+  * Use only `anomaly_high` or `anomaly_low` for one-sided thresholds.
+* `operators`: Specifies how to evaluate a feature against its thresholds.
 
-## Troubleshooting & edge cases
+  * Supported values: `above`, `below`, `outside_range`, `>`, `<`, `>=`, `<=`, `==`, `!=`.
+* `combine`: How per-feature alerts are aggregated into a row-level alert.
 
-- **Missing CSV**: Ensure the file exists and path is correct.
-- **Too few normal rows for ML training**: Agent may print  
-  `"Falling back to rule-based detection — not enough normal rows for ML training"`.
-- **Timestamp parse errors**: Skip affected rows; check CSV formatting.
-- **NaNs**: All-sensor-NaN rows are labeled `unknown`. Partial NaNs are handled in detection.
+  * `"any"`: triggers if any feature exceeds threshold.
+  * `"all"`: triggers only if all features exceed thresholds.
+* `alert_meta`: Optional metadata, including `severity` for each feature. Used in console messages and alert logs.
 
----
+### Adjusting Thresholds and Severity
 
-## Reproducibility & randomness
+1. Open `config/rules.json` in a text editor.
+2. Modify numeric values for `anomaly_low` and `anomaly_high`.
+3. Change `operators` if a feature requires a different rule logic.
+4. Adjust `severity` levels to reflect operational importance (`low`, `medium`, `high`).
+5. Save the file and provide its path to `smartfactory_alert_agent.py` using the `--rules` argument.
 
-- Controlled via `--seed` (default **42**).
-- Setting the same seed ensures identical datasets and agent outputs across runs.
-- Change the seed with `--seed <int>`.
+> **Note:** If a feature specified in the rules is missing in the dataset, the agent will log a warning and ignore that feature.
 
----
 
-## AI tools & credits
+## Output / Artifacts
 
-- **ChatGPT (free)**: Prompt Assistant, code generation, docstrings, and README drafting.
+The project generates several artifacts during dataset generation, preprocessing, model training, and real-time simulation. The default output directory is `./out`, but it can be changed via CLI arguments.
 
-Document usage in reports with screenshots or logs. 
+| Artifact | Location / File | Description |
+|----------|----------------|-------------|
+|Generated dataset|./data/smart_factory_data.csv|Generated data|
+| Cleaned dataset (train) | `./out/train.csv` | Preprocessed training data after missing value imputation and scaling. |
+| Cleaned dataset (test) | `./out/test.csv` | Preprocessed test data for model evaluation. |
+| Scaler object | `./out/scaler.joblib` | Joblib object storing the fitted scaler used for numeric features. |
+| Trained Isolation Forest model | `./out/isolation_forest.joblib` | Joblib object of trained Isolation Forest for anomaly detection. |
+| Threshold recommendations | `./out/threshold.json` | Optional JSON containing recommended threshold for model-based alerts. |
+| Alert logs | `./out/alerts.csv` | CSV of detected anomalies with timestamp, features triggered, raw & scaled values, rule & model flags, severity, and suggestions. |
+| Alert summary | `./out/alerts_summary.json` | Aggregated counts, first/last alert timestamps, and per-feature alert statistics. |
+| Feature anomaly plots | `./out/plots/<feature>_anomalies.png` | Time-series plots for each numeric feature marking rule-based, ML-based, and combined anomalies. |
 
----
+**Notes:**
 
-## Deliverables & submission checklist
-
-Required files for submission:
-
-- `generate_smartfactory_dataset.py`
-- `smartfactory_alert_agent.py`
-- `requirements.txt`
-- `data/smartfactory_dataset.csv` (sample)
-- `report.pdf` (2–3 pages)
-- `README.md`
-- Demo screenshots of alerts and outputs
-
----    
-    
-## Extending the project (optional ideas)
-
-- Add unique device IDs for multi-machine scenarios.
-- Explore time-series models (LSTM, Prophet) for anomaly prediction.
-- Build a web dashboard to visualize alerts.
-- Aggregate alerts over a time window for operational insights.
-
+- All CSVs are comma-delimited with headers.
+- Joblib objects (`.joblib`) can be loaded with `joblib.load()` for inference or further processing.
+- Plots are saved as PNG files and can be viewed in any image viewer.
+- The alert logs and summary are updated in real-time during simulation.
