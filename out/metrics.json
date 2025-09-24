@@ -1,0 +1,13 @@
+{
+    "accuracy": 0.85,
+    "precision_normal": 0.8227848101265823,
+    "precision_abnormal": 0.9523809523809523,
+    "recall_normal": 0.9848484848484849,
+    "recall_abnormal": 0.5882352941176471,
+    "f1_normal": 0.896551724137931,
+    "f1_abnormal": 0.7272727272727273,
+    "avg_precision": 0.8875828812537674,
+    "avg_recall": 0.786541889483066,
+    "roc_auc": 0.9148841354723707,
+    "anomaly_fraction": 0.21
+}
