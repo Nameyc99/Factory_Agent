@@ -82,30 +82,25 @@ python preprocess_data.py \
 ### 3. Train Isolation Forest
 
 ```
-python train_isolation_forest.py \
-  --train ./out/train.csv \
-  --test ./out/test.csv \
+python train_isolation_forest.py --train ./out/train.csv --test ./out/test.csv \
+    --output_model ./out/isolation_forest.joblib \
+    --grid_search --report
+```
+
+### 4. Run Alert Agent (with delay)
+```
+python smartfactory_alert_agent.py \
+  --input ./data/smart_factory_data.csv \
   --scaler ./out/scaler.joblib \
-  --output_model ./out/isolation_forest.joblib \
-  --contamination 0.01 \
-  --n_estimators 100 \
+  --model ./out/isolation_forest.joblib \
+  --rules ./config/rules.json \
+  --out_dir ./out \
   --report
 ```
 
-### 4. Train Isolation Forest with Grid Search
+### (Optional) 5. Run Alert Agent (with delay)
 ```
-python train_isolation_forest.py \
-  --train ./out/train.csv \
-  --test ./out/test.csv \
-  --scaler ./out/scaler.joblib \
-  --output_model ./out/isolation_forest.joblib \
-  --grid_search \
-  --report
- ```
 
-
-### 5. Run Alert Agent (Rule + ML Detection)
-```
 python smartfactory_alert_agent.py \
   --input ./data/smart_factory_data.csv \
   --scaler ./out/scaler.joblib \
@@ -117,17 +112,7 @@ python smartfactory_alert_agent.py \
   --use_sleep
 ```
 
-### 6. Run Alert Agent (Rule-Only Detection)
-```
-python smartfactory_alert_agent.py \
-  --input ./data/smart_factory_data.csv \
-  --scaler ./out/scaler.joblib \
-  --rules ./config/rules.json \
-  --out_dir ./out \
-  --report
-```
-
-### 7. Limit Number of Rows (for Testing)
+### (Optional)6. Limit Number of Rows (for Testing)
 ```
 python smartfactory_alert_agent.py \
   --input ./data/smart_factory_data.csv \
